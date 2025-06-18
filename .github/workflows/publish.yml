@@ -93,8 +93,17 @@ jobs:
 
           run wget https://raw.githubusercontent.com/leleliu008/ppkg/master/ppkg
           run chmod a+x ppkg
+
           run ./ppkg setup
           run ./ppkg update
+
+          printf '%s\n' '
+          fix-url: https://raw.githubusercontent.com/AppImage/type2-runtime/refs/heads/main/patches/libfuse/mount.c.diff
+          fix-sha: 1c7fd9e26717545a476b226b083a9f9d05676c180edbd71a04bbd8a73599dc44
+          ' >> ~/.ppkg/repos.d/official-core/formula/linux/libfuse.yml
+
+          ~/.ppkg/uppm/installed/gsed/bin/gsed -i '/^git-url:/a git-sha: ${{ needs.check.outputs.git-sha }}' ~/.ppkg/repos.d/official-core/formula/linux/appimage-runtime-type2.yml
+
           run ./ppkg install appimage-runtime-type2 --static --profile=${{ matrix.profile }}
           run ./ppkg bundle  appimage-runtime-type2 .tar.xz
           EOF
