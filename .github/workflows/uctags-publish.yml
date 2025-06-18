@@ -1,0 +1,141 @@
+name: publish
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'
+
+jobs:
+
+  check:
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: AppImage/type2-runtime
+
+      - id:  check-if-has-new-commit
+        run: |
+          cat > QUERY <<EOF
+          {
+            repository(owner: "${{ github.repository_owner }}", name: "appimage-runtime-type2-prebuild") {
+                latestRelease {
+                  name
+                }
+            }
+          }
+          EOF
+
+          LATEST_RELEASE_GIT_SHA="$(gh api graphql -f "query=$(cat QUERY)" --jq .data.repository.latestRelease.name)"
+
+          printf 'LATEST_RELEASE_GIT_SHA=%s\n' "$LATEST_RELEASE_GIT_SHA"
+
+          CURRENT_SOURCE_GIT_SHA="$(git rev-parse HEAD)"
+
+          printf 'CURRENT_SOURCE_GIT_SHA=%s\n' "$CURRENT_SOURCE_GIT_SHA"
+
+          if [ "$LATEST_RELEASE_GIT_SHA" = "$CURRENT_SOURCE_GIT_SHA" ] ; then
+              printf 'HAS_NEW_COMMIT=no\n'        >> "$GITHUB_OUTPUT"
+          else
+              printf 'HAS_NEW_COMMIT=yes\n'       >> "$GITHUB_OUTPUT"
+          fi
+
+          printf 'GIT_SHA=%s\n' "$CURRENT_SOURCE_GIT_SHA" >> "$GITHUB_OUTPUT"
+
+    outputs:
+      if-has-new-commit: ${{ steps.check-if-has-new-commit.outputs.HAS_NEW_COMMIT }}
+      git-sha:           ${{ steps.check-if-has-new-commit.outputs.GIT_SHA }}
+
+
+  build:
+    needs: [check]
+    if: needs.check.outputs.if-has-new-commit == 'yes'
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        target-arch: [loongarch64, x86_64, aarch64, riscv64, ppc64le, s390x]
+        profile: [debug, release]
+
+    steps:
+      - run: |
+          cat > run.sh <<EOF
+          set -ex
+
+          COLOR_GREEN='\033[0;32m'        # Green
+          COLOR_PURPLE='\033[0;35m'       # Purple
+          COLOR_OFF='\033[0m'             # Reset
+
+          echo() {
+              printf '%b\n' "\$*"
+          }
+
+          run() {
+              echo "\${COLOR_PURPLE}==>\${COLOR_OFF} \${COLOR_GREEN}\$@\${COLOR_OFF}"
+              eval "\$*"
+          }
+
+          ########################################################################
+
+          run uname -a
+          run id
+          run pwd
+
+          export GITHUB_ACTIONS=true
+
+          ########################################################################
+
+          run wget https://raw.githubusercontent.com/leleliu008/ppkg/master/ppkg
+          run chmod a+x ppkg
+          run ./ppkg setup
+          run ./ppkg update
+          run ./ppkg install appimage-runtime-type2 --static --profile=${{ matrix.profile }}
+          run ./ppkg bundle  appimage-runtime-type2 .tar.xz
+          EOF
+
+      - run: curl -LO https://raw.githubusercontent.com/alpinelinux/alpine-chroot-install/master/alpine-chroot-install
+      - run: chmod +x alpine-chroot-install
+      - run: sudo ./alpine-chroot-install -d /alpine -a ${{ matrix.target-arch }} -p wget -p g++
+      - run: /alpine/enter-chroot sh run.sh
+      - run: /alpine/destroy
+
+      - run: ls
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appimage-runtime-type2---linux-${{ matrix.target-arch }}.${{ matrix.profile }}.tar.xz
+          path: appimage-runtime-type2-*-linux-${{ matrix.target-arch }}.${{ matrix.profile }}.tar.xz
+
+
+  publish:
+    needs: [check, build]
+    if: needs.check.outputs.if-has-new-commit == 'yes'
+
+    runs-on: ubuntu-latest
+
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*'
+          path: .
+          merge-multiple: true
+
+      - run: ls -a
+
+      # to avaid: failed to run git: fatal: not a git repository (or any of the parent directories): .git
+      - run: git -c init.defaultBranch=master init
+      - run: git remote add origin ${{ github.repositoryUrl }}
+
+      - run: |
+          printf 'build-from: https://github.com/AppImage/type2-runtime/tree/%s\n' ${{ needs.check.outputs.git-sha }} > notes.md
+
+      - run: gh release create ${{ needs.check.outputs.git-sha }} appimage-runtime-type2-linux-*.tar.xz --title ${{ needs.check.outputs.git-sha }} --notes-file notes.md
