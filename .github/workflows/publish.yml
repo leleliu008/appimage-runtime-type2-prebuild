@@ -147,4 +147,4 @@ jobs:
       - run: |
           printf 'build-from: https://github.com/AppImage/type2-runtime/tree/%s\n' ${{ needs.check.outputs.git-sha }} > notes.md
 
-      - run: gh release create ${{ needs.check.outputs.git-sha }} *.tar.xz --title ${{ needs.check.outputs.git-sha }} --notes-file notes.md
+      - run: gh release create "$(date +%Y.%m.%d)-${{ needs.check.outputs.git-sha }}" *.tar.xz --title ${{ needs.check.outputs.git-sha }} --notes-file notes.md
